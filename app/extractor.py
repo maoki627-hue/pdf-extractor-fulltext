@@ -1,51 +1,124 @@
-# extractor.py
-from PyPDF2 import PdfReader
-import re
-import os
+# extractor.py — Stable Ver 1.2 (Title extraction + FullText fallback)
 
+from PyPDF2 import PdfReader
+import os
+import re
+
+# セクション識別
 TARGET_SECTIONS = ["abstract", "introduction", "discussion"]
 
-def extract_sections(pdf_path):
+
+def sanitize_title(title: str) -> str:
+    """Word heading でクラッシュしないようにタイトルを無害化"""
+    if not title:
+        return ""
+
+    # Zero-width / Unicode 制御文字削除
+    title = re.sub(r'[\u200B-\u200F\u202A-\u202E]', '', title)
+
+    # 改行は入れない（python-docx がクラッシュするため）
+    title = title.replace("\n", " ").replace("\r", " ")
+
+    # 記号類を削除 or スペース置換
+    title = re.sub(r'[\\/:*?"<>|]', ' ', title)
+
+    # 余分なスペースをまとめる
+    title = ' '.join(title.split())
+
+    return title.strip()
+
+
+def extract_title_from_first_page(first_page_text: str) -> str:
+    """1ページ目から論文タイトルらしい1行を抽出（A-3 仕様）"""
+    if not first_page_text:
+        return ""
+
+    lines = [ln.strip() for ln in first_page_text.split("\n") if ln.strip()]
+    candidates = []
+
+    for ln in lines[:12]:  # 先頭12行くらいを候補に
+        low = ln.lower()
+
+        # ジャーナル種別・カテゴリ名は除外
+        if low in (
+            "original research",
+            "pediatric cardiology",
+            "review",
+            "editorial",
+            "case report",
+            "short communication"
+        ):
+            continue
+
+        # セクション名は除外
+        if low in ("abstract", "introduction", "discussion"):
+            continue
+
+        # 著者行っぽいもの（カンマ大量、MD/PhDなど）は除外
+        if " md" in low or " phd" in low or low.count(",") >= 2:
+            continue
+
+        # 単語数がある程度ある行のみ（＝タイトルらしい）
+        if len(ln.split()) >= 5:
+            candidates.append(ln)
+
+    if candidates:
+        return sanitize_title(candidates[0])
+
+    return ""
+
+
+def extract_sections(pdf_path: str) -> dict:
     reader = PdfReader(pdf_path)
     pages = [page.extract_text() or "" for page in reader.pages]
 
-    text = "\n".join(pages)
+    full_text = "\n".join(pages)
+
+    # 行単位に分割（セクション検出用）
+    lines = full_text.split("\n")
+    lines_lower = [ln.strip().lower() for ln in lines]
 
     sections = {}
 
-    # --- 通常のセクション抽出 ---
-    lower = text.lower()
+    # --------------------
+    # 1) セクション抽出
+    # --------------------
     for sec in TARGET_SECTIONS:
-        if sec in lower:
-            pattern = rf"{sec}(.+?)(?=(abstract|introduction|discussion|references|$))"
-            found = re.findall(pattern, lower, flags=re.DOTALL)
-            if found:
-                sections[sec.capitalize()] = found[0][0].strip()
+        sec_lower = sec.lower()
+        for i, ln in enumerate(lines_lower):
+            if ln == sec_lower:  # 行頭単独一致のみ
+                start = i + 1
+                end = len(lines)
+                for j in range(start, len(lines_lower)):
+                    if lines_lower[j] in TARGET_SECTIONS:
+                        end = j
+                        break
+                body = "\n".join(lines[start:end]).strip()
+                if len(body) > 30:  # 最低文字数
+                    sections[sec.capitalize()] = body
+                break
 
-    # --- ★ Fallback: セクション抽出ゼロなら FullText を返す ---
-    if len(sections) == 0:
-        full_text = text.strip()
+    # --------------------
+    # 2) タイトル抽出（A-3）
+    # --------------------
+    title = extract_title_from_first_page(pages[0]) if pages else ""
 
-        # ----- タイトル抽出 A-3 -----
-        first_page = pages[0].split("\n")
+    # タイトルが抽出できなければ → PDF ファイル名
+    if not title:
+        title = sanitize_title(os.path.splitext(os.path.basename(pdf_path))[0])
 
-        # 一行目〜三行目を候補
-        candidates = [
-            line.strip()
-            for line in first_page[:6]
-            if len(line.strip()) > 6
-        ]
+    # Word heading に必ず使う
+    final_sections = {"__TITLE__": title}
 
-        # 条件に合う候補を抽出
-        if candidates:
-            title = candidates[0]
-        else:
-            # PDF タイトル抽出不可 → ファイル名
-            title = os.path.splitext(os.path.basename(pdf_path))[0]
+    # --------------------
+    # 3) セクションが1つでもあれば → Title + セクション
+    # --------------------
+    if len(sections) > 0:
+        final_sections.update(sections)
+        return final_sections
 
-        sections = {
-            "Title": title,
-            "FullText": full_text
-        }
-
-    return sections
+    # --------------------
+    # 4) セクションがゼロ → FullText fallback（確実に出力される）
+    # --------------------
+    final_sections["FullText"] = full_text.strip()
+    return final_sections
