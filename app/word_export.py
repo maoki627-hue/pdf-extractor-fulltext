@@ -1,32 +1,20 @@
 from docx import Document
 
-def export_to_word(sections, save_path, title=None):
-    """
-    sections: dict（_title を含まない、本文セクション）
-    save_path: 保存先の .docx パス
-    title: 論文タイトル（extractor.py で _title として抽出）
-    """
-
+def export_to_word(sections: dict, save_path: str):
     doc = Document()
 
-    # ---- 先頭に大見出しとしてタイトルを表示 ----
+    # dict をコピーして内部用に
+    data = dict(sections)
+
+    # 特別なタイトルキーを取り出す
+    title = data.pop("__TITLE__", None)
     if title:
+        # 論文タイトルをドキュメント先頭の大見出しに
         doc.add_heading(title, level=0)
-        doc.add_paragraph("")  # 空行を追加
 
-    # ---- セクションごとに出力 ----
-    for sec, text in sections.items():
-        if sec.startswith("_"):
-            continue
-        if not text:
-            continue
-
-        # セクション見出し（Full Text 含む）
+    # 残りのキーをセクションとして出力
+    for sec, content in data.items():
         doc.add_heading(sec, level=1)
+        doc.add_paragraph(content)
 
-        # 本文
-        doc.add_paragraph(text)
-        doc.add_paragraph("")  # 1 行あける
-
-    # ---- 保存 ----
     doc.save(save_path)
