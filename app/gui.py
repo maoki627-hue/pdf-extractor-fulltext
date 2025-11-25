@@ -1,3 +1,4 @@
+# gui.py — Stable Ver 1.3 Final
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from extractor import extract_sections
@@ -8,110 +9,94 @@ import os
 class PDFExtractorGUI:
     def __init__(self, master):
         self.master = master
-        master.title("PDF抽出ツール v2（FullText対応）")
-        master.geometry("720x520")
-        
-        self.pdf_path = None          # 選択されたPDFパス
-        self.sections = {}            # セクション内容
-        self.title = None             # PDFタイトル
-        
-        # --- Step 1: PDF選択 ---
-        frame1 = tk.LabelFrame(master, text="Step 1: PDF を選択してください")
-        frame1.pack(fill="x", padx=10, pady=5)
+        self.master.geometry("700x500")
+        self.master.title("PDF Extractor for Speechify (FullText Version)")
+        self.pdf_path = None
+        self.sections = {}
 
-        tk.Button(frame1, text="PDF を選択", command=self.select_pdf).pack(pady=6)
-        self.pdf_label = tk.Label(frame1, text="（未選択）")
+        # Step1: PDF選択
+        self.step1_frame = tk.LabelFrame(master, text="Step1: PDFを選択")
+        self.step1_frame.pack(fill="x", padx=10, pady=5)
+
+        self.select_btn = tk.Button(self.step1_frame, text="PDFを選択", command=self.select_pdf)
+        self.select_btn.pack(pady=10)
+
+        self.pdf_label = tk.Label(self.step1_frame, text="PDFが選択されていません")
         self.pdf_label.pack()
 
-        # --- Step 2: セクション選択 ---
-        frame2 = tk.LabelFrame(master, text="Step 2: 出力するセクションを選択")
-        frame2.pack(fill="both", expand=True, padx=10, pady=5)
-
-        self.frame_sections = frame2
-        self.check_vars = {}
-
-        # --- Step 3: 整形 ---
-        frame3 = tk.LabelFrame(master, text="Step 3: Speechify向け整形を実行")
-        frame3.pack(fill="x", padx=10, pady=5)
-
-        tk.Button(frame3, text="整形を実行", command=self.run_format).pack(pady=6)
-
-        # --- Step 4: Word 出力 ---
-        frame4 = tk.LabelFrame(master, text="Step 4: Word ファイルとして保存")
-        frame4.pack(fill="x", padx=10, pady=5)
-
-        tk.Button(frame4, text="Word に保存", command=self.save_word).pack(pady=6)
-
-    # ★ PDF を選択してセクションを抽出
-    def select_pdf(self):
-        path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
-        if not path:
-            return
-        
-        self.pdf_path = path
-        self.pdf_label.config(text=os.path.basename(path))
-
-        # セクション抽出
-        data = extract_sections(path)
-
-        # タイトル
-        self.title = data.get("_title")
-
-        # セクション本体のみ
-        self.sections = {k: v for k, v in data.items() if not k.startswith("_")}
-
-        if not self.sections:
-            messagebox.showwarning("抽出できません", "PDFからテキストを抽出できませんでした。")
-            return
-
-        self._refresh_section_checkboxes()
-        messagebox.showinfo("抽出完了", "PDF からセクションを抽出しました。")
-
-    # ★ チェックボックス描画更新
-    def _refresh_section_checkboxes(self):
-        for w in self.frame_sections.winfo_children():
-            w.destroy()
+        # Step2: セクション選択
+        self.step2_frame = tk.LabelFrame(master, text="Step2: 出力するセクションを選択（FullTextは自動使用）")
+        self.step2_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         self.check_vars = {}
-        for sec in self.sections.keys():
+        for sec in ["Abstract", "Introduction", "Discussion"]:
             var = tk.IntVar(value=1)
-            tk.Checkbutton(self.frame_sections, text=sec, variable=var).pack(anchor="w")
+            cb = tk.Checkbutton(self.step2_frame, text=sec, variable=var)
+            cb.pack(anchor="w")
             self.check_vars[sec] = var
 
-    # ★ 整形実行
-    def run_format(self):
+        # Step3: 整形
+        self.step3_frame = tk.LabelFrame(master, text="Step3: Speechify向け整形")
+        self.step3_frame.pack(fill="x", padx=10, pady=5)
+
+        self.format_btn = tk.Button(self.step3_frame, text="整形実行", command=self.format_sections)
+        self.format_btn.pack(pady=10)
+
+        # Step4: Word出力
+        self.step4_frame = tk.LabelFrame(master, text="Step4: Wordに出力")
+        self.step4_frame.pack(fill="x", padx=10, pady=5)
+
+        self.export_btn = tk.Button(self.step4_frame, text="Wordに出力", command=self.export_word)
+        self.export_btn.pack(pady=10)
+
+    def select_pdf(self):
+        path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
+        if path:
+            self.pdf_path = path
+            self.pdf_label.config(text=os.path.basename(path))
+            self.sections = extract_sections(path)
+            messagebox.showinfo("抽出完了", "PDFからセクションを抽出しました")
+
+    def format_sections(self):
         if not self.sections:
-            messagebox.showwarning("未抽出", "PDFを先に選択してください。")
+            messagebox.showwarning("未抽出", "先にPDFを選択してください")
             return
-        
         for sec in self.sections:
-            self.sections[sec] = format_text(self.sections[sec])
-        
-        messagebox.showinfo("整形完了", "Speechify向けの整形が完了しました。")
+            if sec != "__TITLE__":
+                self.sections[sec] = format_text(self.sections[sec])
+        messagebox.showinfo("整形完了", "Speechify向け整形が完了しました")
 
-    # ★ Word 保存
-    def save_word(self):
+    def export_word(self):
         if not self.sections:
-            messagebox.showwarning("未抽出", "PDFを先に選択してください。")
+            messagebox.showwarning("未抽出", "先にPDFを選択してください")
             return
-        
-        selected = {sec: self.sections[sec] for sec, var in self.check_vars.items() if var.get() == 1}
 
-        if not selected:
-            messagebox.showwarning("未選択", "少なくとも1つのセクションを選択してください。")
-            return
-        
-        path = filedialog.asksaveasfilename(
+        # __TITLE__ は常に含める
+        selected_sections = {"__TITLE__": self.sections["__TITLE__"]}
+
+        # チェックされたセクションを追加
+        for sec, var in self.check_vars.items():
+            if var.get() == 1 and sec in self.sections:
+                selected_sections[sec] = self.sections[sec]
+
+        # セクションが何も無い場合 → FullText fallback
+        if len(selected_sections) == 1:  # タイトルだけ
+            if "FullText" in self.sections:
+                selected_sections["FullText"] = self.sections["FullText"]
+            else:
+                messagebox.showwarning("データなし", "抽出された本文がありません。")
+                return
+
+        # 保存処理
+        save_path = filedialog.asksaveasfilename(
             defaultextension=".docx",
             filetypes=[("Word files", "*.docx")]
         )
-        if not path:
-            return
-        
-        export_to_word(selected, path, self.title)
-        messagebox.showinfo("保存完了", f"{os.path.basename(path)} を保存しました。")
+        if save_path:
+            export_to_word(selected_sections, save_path)
+            messagebox.showinfo("出力完了", f"{os.path.basename(save_path)} に出力しました")
 
-# --- 実行 ---
+
 if __name__ == "__main__":
     root = tk.Tk()
     app = PDFExtractorGUI(root)
