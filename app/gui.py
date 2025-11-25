@@ -1,4 +1,4 @@
-# gui.py — Stable Ver 1.3 Final
+# gui.py — タイトル手動編集対応版
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from extractor import extract_sections
@@ -9,10 +9,13 @@ import os
 class PDFExtractorGUI:
     def __init__(self, master):
         self.master = master
-        self.master.geometry("700x500")
+        self.master.geometry("700x550")
         self.master.title("PDF Extractor for Speechify (FullText Version)")
         self.pdf_path = None
         self.sections = {}
+
+        # タイトル用 StringVar
+        self.title_var = tk.StringVar()
 
         # Step1: PDF選択
         self.step1_frame = tk.LabelFrame(master, text="Step1: PDFを選択")
@@ -23,6 +26,13 @@ class PDFExtractorGUI:
 
         self.pdf_label = tk.Label(self.step1_frame, text="PDFが選択されていません")
         self.pdf_label.pack()
+
+        # タイトル編集欄
+        self.title_frame = tk.LabelFrame(master, text="タイトル（必要なら編集してください）")
+        self.title_frame.pack(fill="x", padx=10, pady=5)
+
+        self.title_entry = tk.Entry(self.title_frame, textvariable=self.title_var)
+        self.title_entry.pack(fill="x", padx=5, pady=5)
 
         # Step2: セクション選択
         self.step2_frame = tk.LabelFrame(master, text="Step2: 出力するセクションを選択（FullTextは自動使用）")
@@ -55,12 +65,21 @@ class PDFExtractorGUI:
             self.pdf_path = path
             self.pdf_label.config(text=os.path.basename(path))
             self.sections = extract_sections(path)
+
+            # 自動抽出タイトル or ファイル名をタイトル欄に入れる
+            auto_title = self.sections.get(
+                "__TITLE__",
+                os.path.splitext(os.path.basename(path))[0]
+            )
+            self.title_var.set(auto_title)
+
             messagebox.showinfo("抽出完了", "PDFからセクションを抽出しました")
 
     def format_sections(self):
         if not self.sections:
             messagebox.showwarning("未抽出", "先にPDFを選択してください")
             return
+        # __TITLE__ は整形しない
         for sec in self.sections:
             if sec != "__TITLE__":
                 self.sections[sec] = format_text(self.sections[sec])
@@ -71,8 +90,15 @@ class PDFExtractorGUI:
             messagebox.showwarning("未抽出", "先にPDFを選択してください")
             return
 
-        # __TITLE__ は常に含める
-        selected_sections = {"__TITLE__": self.sections["__TITLE__"]}
+        # タイトルはタイトル欄の内容を優先
+        custom_title = self.title_var.get().strip()
+        if custom_title:
+            selected_sections = {"__TITLE__": custom_title}
+        else:
+            fallback = self.sections.get("__TITLE__", "")
+            if not fallback and self.pdf_path:
+                fallback = os.path.splitext(os.path.basename(self.pdf_path))[0]
+            selected_sections = {"__TITLE__": fallback}
 
         # チェックされたセクションを追加
         for sec, var in self.check_vars.items():
