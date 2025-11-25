@@ -29,13 +29,13 @@ jobs:
       - name: Install PyInstaller
         run: pip install pyinstaller
 
-      - name: Build EXE (with icon if available)
+      - name: Build EXE (with icon support)
         run: |
-          if exist app\icon.ico (
+          if (Test-Path "app/icon.ico") {
             pyinstaller --onefile --windowed --icon=app/icon.ico --name=pdf_extractor_fulltext app/gui.py
-          ) else (
+          } else {
             pyinstaller --onefile --windowed --name=pdf_extractor_fulltext app/gui.py
-          )
+          }
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
