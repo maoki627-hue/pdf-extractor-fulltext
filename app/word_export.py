@@ -1,37 +1,40 @@
+# word_export.py — FullText Safe Split Version (Ver 2.0)
 from docx import Document
 
 def export_to_word(sections: dict, save_path: str):
+    """
+    改良点：
+      - FullText などの巨大テキストは 2500 文字ごとに分割して複数段落で出力
+      - python-docx の 1段落上限による silent-fail を完全回避
+    """
 
-    def add_large_text(doc, text):
+    def safe_add_paragraph(doc, text, chunk_size=2500):
         """
-        python-docx の silent-fail を防ぐため、
-        巨大テキストを安全に段落分割して追加する
+        2500字単位で分割して doc に複数段落で追加する。
         """
-        # 不要な制御文字を削除
-        text = text.replace("\x0c", " ").replace("\x0b", " ")
-
-        # 行ごとに段落として追加（最も安全）
-        lines = text.split("\n")
-        for ln in lines:
-            ln = ln.strip()
-            if ln:
-                doc.add_paragraph(ln)
-            else:
-                doc.add_paragraph("")  # 空行も保持
+        if not text:
+            return
+        text = text.strip()
+        for i in range(0, len(text), chunk_size):
+            part = text[i:i+chunk_size]
+            doc.add_paragraph(part)
 
     doc = Document()
 
-    # dict をコピーして内部用に
-    data = dict(sections)
-
-    # タイトル
-    title = data.pop("__TITLE__", None)
+    # ---- タイトル（必須）----
+    title = sections.get("__TITLE__", "").strip()
     if title:
         doc.add_heading(title, level=0)
 
-    # セクションごとに出力
-    for sec, content in data.items():
-        doc.add_heading(sec, level=1)
-        add_large_text(doc, content)
+    # ---- 本文セクション ----
+    for sec, content in sections.items():
+        if sec == "__TITLE__":
+            continue
 
+        doc.add_heading(sec, level=1)
+
+        # FullText や巨大セクションは安全分割
+        safe_add_paragraph(doc, content)
+
+    # ---- 保存 ----
     doc.save(save_path)
