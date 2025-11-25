@@ -1,0 +1,52 @@
+name: Build Windows EXE (with icon)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if exist requirements.txt (
+            pip install -r requirements.txt
+          ) else (
+            pip install PyPDF2 python-docx
+          )
+
+      - name: Install PyInstaller
+        run: |
+          pip install pyinstaller
+
+      - name: Prepare icon
+        run: |
+          if not exist app\icon.ico (
+            echo "Icon not found! Default icon will be used." 
+          )
+
+      - name: Build executable (with icon)
+        run: |
+          pyinstaller --onefile --windowed `
+            --icon=app/icon.ico `
+            --name=pdf_extractor_fulltext `
+            .\app\gui.py
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: pdf_extractor_fulltext_windows_exe
+          path: dist\pdf_extractor_fulltext.exe
