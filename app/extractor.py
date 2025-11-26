@@ -1,128 +1,213 @@
-# extractor.py — Stable Ver 1.3 (Title extraction + FullText fallback + invisible space fix)
+# extractor.py — PyMuPDF版 + Abstractフェイルセーフ対応
 
-from PyPDF2 import PdfReader
+import fitz  # PyMuPDF
 import os
 import re
 
-# セクション識別
 TARGET_SECTIONS = ["abstract", "introduction", "discussion"]
 
 
 def sanitize_title(title: str) -> str:
-    """Word heading が silent-fail しないように論文タイトルを完全無害化"""
+    """Word heading が壊れないようにタイトルを無害化"""
     if not title:
         return ""
 
     # Zero-width / Unicode 制御文字削除
     title = re.sub(r'[\u200B-\u200F\u202A-\u202E]', '', title)
 
-    # ★ 不可視スペース（NBSP, thin-space, narrow no-break space）を通常スペースへ変換
+    # 不可視スペース → 通常スペース
     title = title.replace("\u00A0", " ").replace("\u2009", " ").replace("\u202F", " ")
 
-    # 改行は heading に入れられないため削除
+    # 改行削除
     title = title.replace("\n", " ").replace("\r", " ")
 
-    # 記号類（Windows filename/Word heading 禁止文字）を無害化
-    title = re.sub(r'[\\/:*?"<>|]', ' ', title)
+    # ファイル名禁止文字
+    title = re.sub(r'[\\/:*?"<>|]', " ", title)
 
-    # 余分なスペースの整理
-    title = ' '.join(title.split())
+    # 余分なスペース整理
+    title = " ".join(title.split())
 
     return title.strip()
 
 
-def extract_title_from_first_page(first_page_text: str) -> str:
-    """論文タイトルを1ページ目から抽出（A-3 ルールに基づく）"""
-    if not first_page_text:
+def clean_text(text: str) -> str:
+    """制御文字除去・改行整理などの共通クレンジング"""
+    if not text:
         return ""
 
-    # 1行ずつに分解
-    lines = [ln.strip() for ln in first_page_text.split("\n") if ln.strip()]
-    candidates = []
+    # CR→LF
+    text = text.replace("\r", "\n")
 
-    for ln in lines[:12]:  # 先頭12行ほどに限定（タイトル周囲）
+    # 制御文字除去（TABは残す）
+    text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text)
+
+    # 連続改行を少し抑える
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
+def extract_title_from_doc(doc: fitz.Document) -> str:
+    """1ページ目からタイトル候補を抽出（2行タイトル対応）"""
+    if len(doc) == 0:
+        return ""
+
+    page0 = doc[0]
+    text = page0.get_text()
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+
+    title_lines = []
+    for ln in lines[:15]:  # 上から15行程度までを見る
         low = ln.lower()
 
-        # 1) ジャーナル種別は除外
-        if low in (
-            "original research",
-            "review",
-            "case report",
-            "editorial",
-            "short communication",
-            "pediatric cardiology",
-        ):
-            continue
+        # セクションヘッダに到達したら終了
+        if low.startswith(("abstract", "background", "introduction")):
+            break
 
-        # 2) セクション名は除外
-        if low in ("abstract", "introduction", "discussion", "background"):
-            continue
-
-        # 3) 著者行（MD, PhD, , が多い）は除外
+        # 著者行らしきものはスキップ
         if " md" in low or " phd" in low or low.count(",") >= 2:
             continue
 
-        # 4) 単語数5以上の “文” だけを候補とする
-        if len(ln.split()) >= 5:
-            candidates.append(ln)
+        # 短すぎる行はタイトル候補としては弱い
+        if len(ln.split()) < 3:
+            continue
 
-    # 最も上にある候補を採用
-    if candidates:
-        return sanitize_title(candidates[0])
+        title_lines.append(ln)
 
-    return ""
+        # 2〜3行程度あれば十分
+        if len(title_lines) >= 2:
+            # 次が明らかなセクションならそこで切る
+            continue
+
+    if not title_lines:
+        return ""
+
+    raw_title = " ".join(title_lines)
+    return sanitize_title(raw_title)
 
 
 def extract_sections(pdf_path: str) -> dict:
-    """Abstract / Introduction / Discussion 抽出 + タイトル付与 + FullText fallback"""
-    reader = PdfReader(pdf_path)
-    pages = [page.extract_text() or "" for page in reader.pages]
+    """
+    Abstract / Introduction / Discussion 抽出 + タイトル付与 + FullText fallback
+    PyMuPDFで全文を取りつつ、Abstractはフェイルセーフ付き。
+    """
+    doc = fitz.open(pdf_path)
 
-    full_text = "\n".join(pages)
+    # --- FullText 作成 ---
+    page_texts = [page.get_text() or "" for page in doc]
+    full_text_raw = "\n".join(page_texts)
+    full_text = clean_text(full_text_raw)
+
     lines = full_text.split("\n")
     lines_lower = [ln.strip().lower() for ln in lines]
 
-    sections = {}
+    sections: dict[str, str] = {}
 
-    # --------------------
-    # 1) セクション抽出
-    # --------------------
-    for sec in TARGET_SECTIONS:
-        sec_lower = sec.lower()
-        for i, ln in enumerate(lines_lower):
-            if ln == sec_lower:  # 行頭単独一致
-                start = i + 1
-                end = len(lines)
-                for j in range(start, len(lines_lower)):
-                    if lines_lower[j] in TARGET_SECTIONS:
-                        end = j
-                        break
-                body = "\n".join(lines[start:end]).strip()
-                if len(body) > 30:
-                    sections[sec.capitalize()] = body
+    # -------------------------
+    # 1) Abstract 抽出（特別扱い）
+    # -------------------------
+    abstract_text = ""
+    start_idx = None
+
+    # ① "abstract" 行を探す
+    for i, low in enumerate(lines_lower[:200]):  # 論文冒頭〜200行程度を対象
+        if low == "abstract" or low.startswith("abstract "):
+            start_idx = i + 1
+            break
+
+    # ② 見つからない場合、"background" を Abstract 先頭とみなすケース
+    if start_idx is None:
+        for i, low in enumerate(lines_lower[:200]):
+            if low.startswith("background"):
+                start_idx = i
                 break
 
-    # --------------------
-    # 2) タイトル抽出
-    # --------------------
-    title = extract_title_from_first_page(pages[0]) if pages else ""
+    if start_idx is not None:
+        # 終了位置を探す（Introduction / Methods / Patients などの前まで）
+        end_idx = len(lines)
+        STOP_KEYS = (
+            "introduction",
+            "methods",
+            "patients and methods",
+            "materials and methods",
+            "results",
+        )
+        for j in range(start_idx + 1, min(len(lines_lower), start_idx + 400)):
+            low = lines_lower[j]
+            if any(low.startswith(k) for k in STOP_KEYS):
+                end_idx = j
+                break
 
-    # タイトル抽出できなければファイル名fallback
+        candidate = "\n".join(lines[start_idx:end_idx]).strip()
+        candidate = clean_text(candidate)
+        abstract_text = candidate
+
+    # 抽出結果を評価し、短すぎ/壊れていそうならフェイルセーフ
+    if abstract_text and len(abstract_text) >= 100:
+        sections["Abstract"] = abstract_text
+    else:
+        sections["Abstract"] = "Abstract Unretrievable."
+
+    # -------------------------
+    # 2) Introduction / Discussion 抽出
+    # -------------------------
+    def extract_section_by_header(header: str) -> str:
+        header_low = header.lower()
+        start = None
+        end = len(lines)
+
+        for i, low in enumerate(lines_lower):
+            if low == header_low or low.startswith(header_low + " "):
+                start = i + 1
+                break
+
+        if start is None:
+            return ""
+
+        STOP_KEYS = [k for k in TARGET_SECTIONS if k != header_low]
+        for j in range(start + 1, len(lines_lower)):
+            if lines_lower[j] in STOP_KEYS:
+                end = j
+                break
+
+        body = "\n".join(lines[start:end]).strip()
+        return clean_text(body)
+
+    intro = extract_section_by_header("introduction")
+    if intro:
+        sections["Introduction"] = intro
+
+    disc = extract_section_by_header("discussion")
+    if disc:
+        sections["Discussion"] = disc
+
+    # -------------------------
+    # 3) タイトル抽出
+    # -------------------------
+    title = extract_title_from_doc(doc)
     if not title:
+        # 取れなければファイル名
         title = sanitize_title(os.path.splitext(os.path.basename(pdf_path))[0])
 
-    # 最終的に必ずタイトルを先頭に入れる
     final_sections = {"__TITLE__": title}
 
-    # --------------------
-    # 3) セクションが1つ以上ある場合
-    # --------------------
-    if len(sections) > 0:
-        final_sections.update(sections)
+    # -------------------------
+    # 4) セクションが1つもまともに取れていない場合 → FullText fallback
+    # -------------------------
+    has_valid_body = any(
+        k in sections and sections[k] and sections[k] != "Abstract Unretrievable."
+        for k in ("Abstract", "Introduction", "Discussion")
+    )
+
+    if not has_valid_body:
+        # FullTextのみ
+        final_sections["FullText"] = full_text
         return final_sections
 
-    # --------------------
-    # 4) セクションゼロ → FullText fallback
-    # --------------------
-    final_sections["FullText"] = full_text.strip()
+    # -------------------------
+    # 5) 通常ケース：抽出できたセクションをマージ
+    # -------------------------
+    final_sections.update(sections)
     return final_sections
